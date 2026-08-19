@@ -1,0 +1,117 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: src/AgentTokenStats.Web/package-lock.json
+      - name: Test
+        run: dotnet test --configuration Release
+      - name: Web
+        working-directory: src/AgentTokenStats.Web
+        run: npm ci && npm run build
+
+  publish:
+    needs: test
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - rid: win-x64
+            os: windows
+            arch: x64
+            binary: ats.exe
+          - rid: win-arm64
+            os: windows
+            arch: arm64
+            binary: ats.exe
+          - rid: linux-x64
+            os: linux
+            arch: x64
+            binary: ats
+          - rid: linux-arm64
+            os: linux
+            arch: arm64
+            binary: ats
+          - rid: osx-x64
+            os: macos
+            arch: x64
+            binary: ats
+          - rid: osx-arm64
+            os: macos
+            arch: arm64
+            binary: ats
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: src/AgentTokenStats.Web/package-lock.json
+      - name: Web
+        working-directory: src/AgentTokenStats.Web
+        run: npm ci && npm run build
+      - name: Short SHA
+        run: echo "SHA7=${GITHUB_SHA:0:7}" >> "$GITHUB_ENV"
+      - name: Publish
+        run: |
+          extra=()
+          if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
+            tag="${GITHUB_REF_NAME}"
+            extra+=(-p:Version="${tag#v}" -p:InformationalVersion="$tag" -p:IncludeSourceRevisionInInformationalVersion=false)
+          fi
+          dotnet publish src/AgentTokenStats/AgentTokenStats.csproj \
+            -c Release \
+            -r "${{ matrix.rid }}" \
+            --self-contained true \
+            -o publish \
+            "${extra[@]}"
+          if [[ "${{ matrix.os }}" != "windows" ]]; then
+            chmod +x "publish/${{ matrix.binary }}"
+          fi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ats_${{ matrix.os }}_${{ matrix.arch }}_${{ env.SHA7 }}
+          path: publish/${{ matrix.binary }}
+          if-no-files-found: error
+
+  release:
+    needs: publish
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          pattern: ats_*
+      - name: Zip and draft release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          mkdir -p zips
+          for dir in artifacts/ats_*; do
+            name="$(basename "$dir")"
+            base="${name%_*}"
+            (cd "$dir" && zip -j "$GITHUB_WORKSPACE/zips/${base}_${TAG}.zip" ./*)
+          done
+          gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --draft --title "$TAG" zips/*.zip

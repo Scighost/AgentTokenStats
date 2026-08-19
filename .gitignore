@@ -1,0 +1,19 @@
+# build output
+dist/
+bin/
+obj/
+
+# frontend
+node_modules/
+src/AgentTokenStats.Web/dist/
+
+# embedded webui build output (built from src/AgentTokenStats.Web)
+src/AgentTokenStats/webui/
+src/AgentTokenStats/wwwroot/
+
+# publish
+artifacts/
+
+# exports / caches
+token_export/
+*.log
